@@ -1,0 +1,244 @@
+#include <SoftPWM.h>
+#include <SoftPWM_timer.h> //softpwm, allows me to PWM non-PWM pins in software
+
+#include <Adafruit_NeoPixel.h>  //library to send data to the neopixels
+#include <Adafruit_TiCoServo.h> //library to use both neopixels and servos on the same board, for 1 servo
+
+#define NEOPIXEL_OUT A1       //neopixel data out, declared as pin a1
+#define TOUCH_SENSOR 2        //touch sensor on pin 2, for the interupt
+#define COLOR_POT A0          //color potentiometer and speed potentiometer on pin A0
+
+#define SERVO_PIN 9           //servo on pin 9 because its a proper pwm pin
+#define SERVO_MAX 1200        //servo's max pos
+#define SERVO_MIDDLE 950      //the safe middle (starting point)
+#define SERVO_MIN 700         //the minimum servo position
+
+#define MODE_CLOSED 0         //mode closed
+#define MODE_OPENED 1         //mode opened
+#define MODE_OPENING 2        //mode opening
+#define MODE_CLOSING 3        //etcetc. for case statement
+#define MODE_RAINBOW 4
+#define MODE_AUDIO 5
+
+byte mode = MODE_CLOSING;   //first mode is mode closing
+
+byte petalPins[] = {3, 4, 5, 6, 10, 11};    //pins for the Petals
+
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(6, NEOPIXEL_OUT, NEO_GRB + NEO_KHZ800);    //intialize the neopixels
+Adafruit_TiCoServo servo;                                                               //initialize the servo and decare it
+int servoPos = SERVO_MIDDLE;                                                            //initialize the servo in the middle position
+
+
+byte color;       //store the color in a byte
+void setup() {  
+  Serial.begin(115200);                                                               //begin serial monitor
+  pixels.begin();                                                                     //initalize neopixels(rgbs)
+  servo.attach(SERVO_PIN, SERVO_MIN, SERVO_MAX);                                      //attach the servo on pin 9
+  pinMode(COLOR_POT, INPUT);                                                          //declare pin COLOR_POT as an input
+  pinMode(TOUCH_SENSOR, INPUT);                                                       //declare TOUCH_SENSOR as an input
+  attachInterrupt(digitalPinToInterrupt(TOUCH_SENSOR), _touchISR, RISING);            //attach the interupt to touch sensor
+
+  SoftPWMBegin();                                                                     //dont need to declare SOFTPWM pins as INPUT/OUTPUT, softPWM does for me. 
+
+
+  servo.write(servoPos);                                                              //Write the initial position to the servo
+  color = (analogRead(COLOR_POT) / 4) - 1;                                            //store the color of the neopixel in a byte
+  pixelsOneColor(color);                                                              //put that color on all the pixels
+
+}
+
+int counter = 0;                                                                      //how many times has loop been run through?
+int speed = 20;                                                                       //how much time to wait after task in loop?
+
+void loop() {
+  boolean finished = true;                                                          //passing through this function passes a true value on finished
+  color = (analogRead(COLOR_POT) / 4) - 1;                                          //read color again and store as a byte
+  switch (mode) {                                                                   // CASE STATEMENTS
+    case MODE_OPENED:                                                               // WHEN OPENED
+        pixelsOneColor(Wheel(color));                                                   //Set all the pixels as one color, on the pot
+        break;                                                                              
+    case MODE_OPENING:                                                              // WHILE OPENING
+        finished = openPetal() && finished;                                            // set the finished value equal to the finished value anded with boolean expression OpenPetals which decrements servo, returns true when servo at min
+        finished = petalLightsOn(counter) && finished;                                // increases the brightness of the LEDs in conjunction with OpenPetals. When finished returns true on if finished is done too.
+        finished = pistilRGBOn(Wheel(color), counter) && finished;                    //change the brightness of the middle pixel with the given color on the Potentiometer, and when finished return 1, increasing brightness as petals open
+        if (finished)
+        {
+          changeMode(MODE_OPENED);                                                    //WHEN ALL DONE: Change the mode to OPENED. (FINISHED).
+        }
+        break;
+    case MODE_CLOSED:                                                               // WHEN CLOSED
+
+        break;
+    case MODE_CLOSING:                                                              // WHILE CLOSING
+        finished = closePetal() && finished;                                          // finished value of the boolean functions are anded with closePetals, a function that increments the servo and returns true when met Max pos
+        finished = petalLightsOff(counter) && finished;                               // petal lights are softPwm'd off, and anded with finished, at the same speed as the petals are closed
+        finished = pistilRGBOff(Wheel(color), counter) && finished;                   // Rainbow pistil is given a brightness value based on counter, decremementing while unfinished, and color represents the potentiometer on Pin A0.
+        if (finished)
+        {
+          changeMode(MODE_CLOSED);                                                    //when FINISHED, Change to mode CLOSED.
+        }
+        break;
+    case MODE_RAINBOW:                                                               // WHEN RAINBOW
+        rainbowPixel(counter);                                                          //Rainbowfy the strand
+
+        break;
+    case MODE_AUDIO:
+
+
+        break;
+  }
+
+  counter++;
+  if (mode != MODE_RAINBOW)                                                         //Add a delay only if the mode isn't rainbow
+    {
+      delay(speed);
+    }
+}
+
+
+
+
+void changeMode(byte newMode) {
+  Serial.println(mode);
+  Serial.println(counter);
+  if (mode != newMode){           //change the mode from its old mode to a new mode
+    mode = newMode;
+    counter = 0;
+  }
+}
+
+void _touchISR () {                //Interupt service routine for touch sensor
+  Serial.println(mode);           //print the mode in the serial monitor
+  if (mode == MODE_CLOSED)
+    {
+      changeMode(MODE_OPENING);        //if CLOSED, change to OPENING
+    }
+   else if (mode == MODE_OPENED)
+    {
+      changeMode(MODE_RAINBOW);       //if OPENED, change to RAINBOW
+    } 
+   else if (mode   == MODE_RAINBOW)
+    {
+      changeMode(MODE_CLOSING);       //if RAINBOW, change to CLOSING
+    }
+}
+
+void rainbowPulse(uint32_t color, int j){   //rainbow Pulse
+  if (j > 255){
+    counter = 0;
+  }
+  for (int i = 0; i < pixels.numPixels(); i++){
+    pixels.setPixelColor(i, Wheel(j));        //feed a changing value to the pixels based on counter. As J increases, so does the color
+  }
+  pixels.show();                  // show pixels (unified color)
+}
+void rainbowPixel(int j){         //individaul rainbow pixel
+  int potVal = analogRead(COLOR_POT);     //read the value of A0
+  int delayVal = potVal / 50;             // calculuate a delay value based on it
+  if (j > 255) {
+    counter = 0;    //reset counter to continue to get rainbow colors
+  }
+  for (int i = 0; i < pixels.numPixels(); i++){
+    pixels.setPixelColor(i, Wheel(((i * 256 / pixels.numPixels()) + j) & 255));   //math to return different color at every pixel
+  }
+  pixels.show();                //show the pixels
+  delay(delayVal);              //delay based on the color potentiometer
+}
+
+void pixelsOneColor(uint32_t color) {     //set all the pixels to one color
+  for (unsigned int i = 0; i < pixels.numPixels(); i++){
+    pixels.setPixelColor(i, color);       //set all the pixels to the color defined by color pot
+  }
+  pixels.show();      //show pixels
+}
+
+boolean pistilRGBOn(uint32_t color, int j) {    //turn the pistil on by increasing brightness
+  for (int i = 0; i < pixels.numPixels(); i++){
+    pixels.setPixelColor(i, color);   //set the pixels to one color, based on the pot
+  }
+  if (j < 250) {
+    return false;   //give it a moment to open a bit
+  }
+  if (j > 750){
+    return true;    //all done
+  }
+  int val = (j - 250) / 2;  //max value is 255 here
+  pixels.setBrightness(val);  //brightness of pixels ranges from 0-255
+  pixels.show();              //show the brightness change
+  return false;               //not done yet until j > 750
+}
+
+boolean pistilRGBOff(uint32_t color, int j) {   //turn the pixels OFF by decreasing brightness
+  for (int i = 0; i < pixels.numPixels(); i++){
+    pixels.setPixelColor(i, color);     //set the pixels to the color pot
+  }
+  if (j > 510){
+    return true;    //if 510, all done
+  }
+  int val = (510 - j) / 2;    //others get a value from 0-255
+
+  pixels.setBrightness(val);  //set brightness value from 0 - 255 based on counter
+  pixels.show();              //show pixel s
+  return false;               //return false until j > 510
+}
+
+boolean petalLightsOn(int j){ //turning the petal ligfts on
+  if (j < 250){   //if counter is less than 250
+    for (int i = 0; i < 6; i++) {
+    SoftPWMSet(petalPins[i], 255);  //set all the petals to 5V. Active low, so all the petals will be off. Essentially a delay
+  }
+    return false;   //and return "not finished"
+  }
+  if (j > 750){
+    return true;    //if counter is greater than 750 the petals are on and done
+  }
+  
+  for (int i = 0; i < 6; i++) {
+    SoftPWMSet(petalPins[i], (750 - j) / 2);  //set each petal to a value from 0-255 based on the counter
+  }
+  return false;        //only done when counter is greater than 750
+}
+
+boolean petalLightsOff(int j){    //function for turning each of the petals off
+  if (j > 510){         //if j is greater than 255
+    for (int i = 0; i < 6; i++) { 
+    SoftPWMSet(petalPins[i], 255);    //255 is max value, and represents the petals being off
+  }
+    return true;    //when counter is greater than 510, turn all petals off
+  }
+  for (int i = 0; i < 6; i++) {
+    SoftPWMSet(petalPins[i], j / 2);    //when counter is less, put the value of j (between 0 - 255) on the petals
+  }
+  return false;     //return not finished
+}
+
+boolean closePetal(){   //function for closing petals
+  if (servoPos >= SERVO_MAX) {    // if the servo position equals or is greater than max
+    return true;          //we're done here
+  }
+  servoPos ++;    //otherwise increment servoPos variable
+  servo.write(servoPos);    //and write it to the servo
+  return false;           //and tell loop we arent done
+}
+
+boolean openPetal(){      //function for opening petals
+  if (servoPos <= SERVO_MIN) {    //if the servo pos equals or is less than servo_min
+    return true;          //we're all finished fam
+  }
+  servoPos --;            //decrement the servoPos if not
+  servo.write(servoPos);  //and write it to the servo
+  return false;         //and tell loop we aren't done
+}
+
+uint32_t Wheel(byte WheelPos) { //this function returns a color value in 1 byte instead of three. feeding a value from 0 - 255 in will return a color, goes from R - B - G - R
+  WheelPos = 255 - WheelPos;
+  if(WheelPos < 85) {
+    return pixels.Color(255 - WheelPos * 3, 0, WheelPos * 3);
+  }
+  if(WheelPos < 170) {
+    WheelPos -= 85;
+    return pixels.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+  }
+  WheelPos -= 170;
+  return pixels.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+}
